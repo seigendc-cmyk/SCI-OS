@@ -1,0 +1,372 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Phase 3: Global Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/app_users/$(request.auth.uid)).data;
+    }
+    
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'seigendc@gmail.com' ||
+        (exists(/databases/$(database)/documents/app_users/$(request.auth.uid)) && getUserData().get('role', 'public') == 'super_admin')
+      );
+    }
+    
+    function isConsoleAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'seigendc@gmail.com' ||
+        (exists(/databases/$(database)/documents/app_users/$(request.auth.uid)) && getUserData().get('role', 'public') in [
+          'super_admin', 'console_admin', 'activation_officer', 'finance_officer', 'support_officer', 'rpn_manager', 'auditor'
+        ])
+      );
+    }
+    
+    function isVendorOwner(vendorId) {
+      return request.auth != null
+        && vendorId is string
+        && exists(/databases/$(database)/documents/app_users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/app_users/$(request.auth.uid)).data.vendorId == vendorId
+        && get(/databases/$(database)/documents/app_users/$(request.auth.uid)).data.role in [
+          "vendor_owner",
+          "owner",
+          "vendor"
+        ]
+        && get(/databases/$(database)/documents/app_users/$(request.auth.uid)).data.profileStatus != "suspended";
+    }
+
+    function isVendorUser(vendorId) {
+      return request.auth != null
+        && vendorId is string
+        && exists(/databases/$(database)/documents/vendorUsers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/vendorUsers/$(request.auth.uid)).data.vendorId == vendorId
+        && get(/databases/$(database)/documents/vendorUsers/$(request.auth.uid)).data.status == "active";
+    }
+
+    function hasVendorPermission(vendorId, permission) {
+      return request.auth != null
+        && vendorId is string
+        && exists(/databases/$(database)/documents/vendorUsers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/vendorUsers/$(request.auth.uid)).data.vendorId == vendorId
+        && get(/databases/$(database)/documents/vendorUsers/$(request.auth.uid)).data.status == "active"
+        && permission in get(/databases/$(database)/documents/vendorUsers/$(request.auth.uid)).data.permissions;
+    }
+
+    function canApproveRefund(vendorId) {
+      return isVendorOwner(vendorId)
+        || hasVendorPermission(vendorId, "pos.refund.approve")
+        || isConsoleAdmin();
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // --- Phase 4: Collection Rules ---
+
+    match /app_users/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isConsoleAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && (request.auth.uid == uid || isConsoleAdmin());
+    }
+
+    match /vendors/{vendorId} {
+      allow get: if (resource != null && resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public') 
+                 || isVendorOwner(vendorId) 
+                 || isConsoleAdmin();
+                 
+      allow list: if (resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public')
+                  || isVendorOwner(resource.data.get('id', ''))
+                  || isConsoleAdmin();
+
+      allow create: if isSignedIn() && request.auth.uid == vendorId;
+      allow update: if isVendorOwner(vendorId) || isConsoleAdmin();
+    }
+
+    match /vendorUsers/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || (resource != null && isVendorOwner(resource.data.get('vendorId', '')))) || isConsoleAdmin();
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+    }
+
+    match /products/{productId} {
+      allow get: if (resource != null && resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public')
+                 || (resource != null && (isVendorOwner(resource.data.get('vendorId', '')) || isVendorUser(resource.data.get('vendorId', ''))))
+                 || isConsoleAdmin();
+                 
+      allow list: if (resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public')
+                  || isVendorOwner(resource.data.get('vendorId', ''))
+                  || isVendorUser(resource.data.get('vendorId', ''))
+                  || isConsoleAdmin();
+      
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update: if isSignedIn() && ((resource != null && (isVendorOwner(resource.data.get('vendorId', '')) || isVendorUser(resource.data.get('vendorId', '')))) || isConsoleAdmin());
+      allow delete: if isSignedIn() && ((resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin());
+    }
+
+    match /audit_logs/{logId} {
+      allow create: if isSignedIn();
+      allow get, list: if isConsoleAdmin();
+    }
+
+    match /console_staff/{uid} {
+      allow read: if isConsoleAdmin();
+      allow create, update: if isSuperAdmin();
+    }
+
+    match /console_invites/{inviteId} {
+      allow get: if true; // Needed for accepting invite
+      allow list: if isConsoleAdmin();
+      allow create: if isSuperAdmin()
+        && incoming().inviteId == inviteId
+        && incoming().email is string
+        && incoming().role is string
+        && incoming().permissions is list
+        && incoming().status == 'pending'
+        && incoming().invitedBy == request.auth.uid;
+      allow update: if isSuperAdmin() || (isSignedIn() && incoming().get('status', '') == 'accepted');
+    }
+
+    match /branches/{branchId} {
+      allow read, list: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update, delete: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+    }
+
+    match /delivery_services/{deliveryId} {
+      allow read, list: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update, delete: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+    }
+
+    match /catalogues/{catalogueId} {
+      allow get, list: if (resource != null && resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public') 
+                        || (resource != null && isVendorOwner(resource.data.get('vendorId', '')))
+                        || isConsoleAdmin();
+
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update, delete: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow get, list: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+      allow create: if true; 
+      allow update: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+    }
+
+    match /staff/{staffId} {
+      allow read, list: if (resource != null && isVendorOwner(resource.data.get('vendorId', ''))) || isConsoleAdmin();
+      allow create: if isVendorOwner(incoming().get('vendorId', ''));
+      allow update, delete: if (resource != null && isVendorOwner(resource.data.get('vendorId', '')));
+    }
+
+    match /plans/{planId} {
+      allow read: if isSignedIn();
+      allow write: if isConsoleAdmin();
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == subscriptionId || 
+        isConsoleAdmin() || 
+        (resource != null && isVendorOwner(resource.data.get('vendorId', '')))
+      );
+      allow create: if isSignedIn() && (
+        request.auth.uid == subscriptionId || 
+        isConsoleAdmin()
+      );
+      allow update: if isConsoleAdmin() || (
+        resource != null && isVendorOwner(resource.data.get('vendorId', ''))
+      );
+    }
+
+    match /activation_requests/{requestId} {
+      allow read: if isVendorOwner(resource.data.get('vendorId', '')) || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update: if isConsoleAdmin();
+    }
+
+    match /notices/{noticeId} {
+      allow get, list: if (resource.data.get('status', '') == 'published' && resource.data.get('visibility', '') == 'public')
+                  || isVendorOwner(resource.data.get('vendorId', ''))
+                  || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().get('vendorId', ''));
+      allow update, delete: if isVendorOwner(existing().get('vendorId', '')) || isConsoleAdmin();
+    }
+
+    match /rpn_agents/{agentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isConsoleAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // --- POS MODULE ---
+    match /pos_terminals/{terminalId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+      allow update, delete: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+    }
+
+    match /pos_shifts/{shiftId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+      allow update: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow delete: if isConsoleAdmin();
+    }
+
+    match /pos_events/{eventId} {
+      allow read, list: if request.auth != null && (
+        isVendorOwner(resource.data.vendorId) || 
+        isVendorUser(resource.data.vendorId) || 
+        isConsoleAdmin()
+      );
+
+      allow create: if request.auth != null && (
+        isVendorOwner(incoming().vendorId) || 
+        isVendorUser(incoming().vendorId) || 
+        isConsoleAdmin()
+      );
+      allow update, delete: if isConsoleAdmin();
+    }
+
+    match /pos_sales/{saleId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+      allow update: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+    }
+
+    match /pos_sale_items/{itemId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+
+    match /pos_cash_movements/{movementId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+
+    match /biEvents/{eventId} {
+      allow read, list: if request.auth != null && (
+        isVendorOwner(resource.data.vendorId) || 
+        isVendorUser(resource.data.vendorId) || 
+        isConsoleAdmin()
+      );
+
+      allow create: if request.auth != null && (
+        isVendorOwner(incoming().vendorId) || 
+        isVendorUser(incoming().vendorId) || 
+        isConsoleAdmin()
+      );
+      allow update: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow delete: if isConsoleAdmin();
+    }
+
+    match /chart_accounts/{accountId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create, update: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+      allow delete: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+    }
+
+    match /accounting_journals/{journalId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+
+    match /journal_lines/{lineId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+
+    match /cashbook_entries/{entryId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /bankbook_entries/{entryId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /receipts/{receiptId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /payment_vouchers/{voucherId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /customer_accounts/{customerId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create, update: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /supplier_accounts/{supplierId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isConsoleAdmin());
+      allow create, update: if isSignedIn() && isVendorOwner(incoming().vendorId);
+    }
+
+    match /inventory_ledger/{ledgerId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+    
+    match /cogs_reserve_ledger/{ledgerId} {
+      allow read, list: if isSignedIn() && (isVendorOwner(resource.data.vendorId) || isVendorUser(resource.data.vendorId) || isConsoleAdmin());
+      allow create: if isSignedIn() && (isVendorOwner(incoming().vendorId) || isVendorUser(incoming().vendorId) || isConsoleAdmin());
+    }
+
+    match /approval_requests/{approvalId} {
+      allow read, list: if request.auth != null && (
+        isVendorOwner(resource.data.vendorId) || 
+        hasVendorPermission(resource.data.vendorId, "pos.approvals.view") ||
+        isConsoleAdmin()
+      );
+
+      allow create: if request.auth != null && (
+        isVendorOwner(incoming().vendorId) || 
+        isVendorUser(incoming().vendorId) || 
+        isConsoleAdmin()
+      );
+
+      allow update: if request.auth != null && (
+        isVendorOwner(resource.data.vendorId)
+        || hasVendorPermission(resource.data.vendorId, "pos.override.approve")
+        || hasVendorPermission(resource.data.vendorId, "pos.discount.approve")
+        || hasVendorPermission(resource.data.vendorId, "pos.void.approve")
+        || isConsoleAdmin()
+      );
+
+      allow delete: if false;
+    }
+
+    match /pos_return_requests/{returnId} {
+      allow read, list: if request.auth != null && (
+        isVendorOwner(resource.data.vendorId) || 
+        isVendorUser(resource.data.vendorId) || 
+        isConsoleAdmin()
+      );
+
+      allow create: if request.auth != null && (
+        isVendorOwner(incoming().vendorId) || 
+        isVendorUser(incoming().vendorId) || 
+        isConsoleAdmin()
+      );
+
+      allow update: if request.auth != null && (
+        canApproveRefund(resource.data.vendorId)
+        || hasVendorPermission(resource.data.vendorId, "pos.refund.complete")
+      );
+
+      allow delete: if false;
+    }
+  }
+}

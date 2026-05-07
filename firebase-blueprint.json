@@ -1,0 +1,430 @@
+{
+  "entities": {
+    "User": {
+      "title": "Application User",
+      "description": "Base user profile for all roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "console_admin", "vendor_owner", "vendor_staff", "public_user"] },
+        "vendorId": { "type": "string", "description": "Linked vendor ID if applicable" },
+        "profileStatus": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Vendor": {
+      "title": "Vendor Profile",
+      "description": "Business details for a vendor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string" },
+        "businessName": { "type": "string" },
+        "slug": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "published", "suspended"] },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
+        "verified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Product": {
+      "title": "Product Listing",
+      "description": "Merchant product identifier and inventory record",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "sku": { "type": "string" },
+        "sector": { "type": "string" },
+        "category": { "type": "string" },
+        "brand": { "type": "string" },
+        "unit": { "type": "string" },
+        "price": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "stockQty": { "type": "number" },
+        "reorderLevel": { "type": "number" },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "visibility": { "type": "string", "enum": ["private", "public"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "vendorId", "name", "price", "stockQty", "status"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "System event audit trail",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "action": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "metadata": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Branch": {
+      "title": "Vendor Branch",
+      "description": "Physical location of a vendor",
+      "type": "object",
+      "properties": {
+        "branchId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["shop", "warehouse", "office", "pickup_point"] },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "country": { "type": "string" },
+        "latitude": { "type": ["number", "null"] },
+        "longitude": { "type": ["number", "null"] },
+        "isMainBranch": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["branchId", "vendorId", "name", "type", "city"]
+    },
+    "DeliveryService": {
+      "title": "Delivery Service",
+      "description": "Logistics configuration for a vendor",
+      "type": "object",
+      "properties": {
+        "deliveryId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "name": { "type": "string" },
+        "providerType": { "type": "string", "enum": ["vendor_owned", "third_party", "pickup_only"] },
+        "contactPerson": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "coverageArea": { "type": "string" },
+        "baseFee": { "type": "number" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "visibility": { "type": "string", "enum": ["private", "public"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["deliveryId", "vendorId", "name", "providerType", "baseFee"]
+    },
+    "Catalogue": {
+      "title": "Interactive Catalogue",
+      "description": "A curated collection of products for public or private viewing",
+      "type": "object",
+      "properties": {
+        "catalogueId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "theme": { "type": "string", "enum": ["classic", "modern", "compact"] },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "visibility": { "type": "string", "enum": ["private", "public"] },
+        "selectedProductIds": { "type": "array", "items": { "type": "string" } },
+        "branchId": { "type": "string" },
+        "deliveryServiceIds": { "type": "array", "items": { "type": "string" } },
+        "whatsappNumber": { "type": "string" },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["catalogueId", "vendorId", "title", "theme", "status", "visibility"]
+    },
+    "Order": {
+      "title": "Merchant Order",
+      "description": "Product enquiry or purchase request from a customer",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "source": { "type": "string", "enum": ["itred_product", "vendor_storefront", "catalogue", "offline_catalogue", "manual"] },
+        "sourceId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerLocation": { "type": "string" },
+        "customerNotes": { "type": "string" },
+        "items": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "productId": { "type": "string" },
+              "name": { "type": "string" },
+              "sku": { "type": "string" },
+              "qty": { "type": "number" },
+              "price": { "type": "number" },
+              "subtotal": { "type": "number" }
+            }
+          }
+        },
+        "estimatedTotal": { "type": "number" },
+        "preferredFulfillment": { "type": "string", "enum": ["pickup", "delivery", "not_specified"] },
+        "branchId": { "type": "string" },
+        "deliveryServiceId": { "type": "string" },
+        "status": { "type": "string", "enum": ["new", "contacted", "confirmed", "fulfilled", "cancelled"] },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "partial", "paid", "not_required"] },
+        "whatsappMessage": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderId", "vendorId", "source", "customerName", "customerPhone", "items", "status"]
+    },
+    "Plan": {
+      "title": "Pricing Plan",
+      "description": "Definition of a subscription tier",
+      "type": "object",
+      "properties": {
+        "planId": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "currency": { "type": "string" },
+        "billingCycle": { "type": "string", "enum": ["monthly", "quarterly", "annual"] },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "products": { "type": "number" },
+            "catalogues": { "type": "number" },
+            "branches": { "type": "number" },
+            "staff": { "type": "number" }
+          }
+        },
+        "active": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Subscription": {
+      "title": "Vendor Subscription",
+      "description": "Active plan and status for a vendor",
+      "type": "object",
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "planId": { "type": "string" },
+        "planCode": { "type": "string" },
+        "status": { "type": "string", "enum": ["trial", "active", "expired", "suspended", "pending_activation"] },
+        "startsAt": { "type": ["string", "null"], "format": "date-time" },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+        "activationSource": { "type": "string" },
+        "lastActivationRequestId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ActivationRequest": {
+      "title": "Activation Request",
+      "description": "Manual request for plan activation or renewal",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "vendorName": { "type": "string" },
+        "selectedPlanId": { "type": "string" },
+        "selectedPlanCode": { "type": "string" },
+        "activationType": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "amountPaid": { "type": "number" },
+        "currency": { "type": "string" },
+        "paymentReference": { "type": "string" },
+        "payerName": { "type": "string" },
+        "payerPhone": { "type": "string" },
+        "notes": { "type": "string" },
+        "proofOfPaymentText": { "type": "string" },
+        "requestedMonths": { "type": "number" },
+        "status": { "type": "string", "enum": ["submitted", "under_review", "approved", "rejected"] },
+        "adminNotes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ConsoleStaff": {
+      "title": "Console Staff",
+      "description": "Internal staff members with platform access",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ConsoleInvite": {
+      "title": "Console Invite",
+      "description": "Invitations for staff to join the console",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedBy": { "type": "string" },
+        "invitedByEmail": { "type": "string" },
+        "invitedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "app_users/{uid}": {
+      "schema": "User",
+      "description": "Authenticated user profiles"
+    },
+    "vendors/{vendorId}": {
+      "schema": "Vendor",
+      "description": "Vendor business profiles"
+    },
+    "vendorUsers/{uid}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Links users to vendors with specific permissions"
+    },
+    "audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System wide audit logs"
+    },
+    "console_staff/{uid}": {
+      "schema": "ConsoleStaff",
+      "description": "Console staff members"
+    },
+    "console_invites/{inviteId}": {
+      "schema": "ConsoleInvite",
+      "description": "Console invitations"
+    },
+    "products/{productId}": {
+      "schema": "Product",
+      "description": "Product listings and inventory management"
+    },
+    "branches/{branchId}": {
+      "schema": "Branch",
+      "description": "Vendor physical branches"
+    },
+    "staff/{staffId}": {
+      "schema": "object",
+      "description": "Vendor staff members"
+    },
+    "delivery_services/{deliveryId}": {
+      "schema": "DeliveryService",
+      "description": "Delivery service configurations"
+    },
+    "catalogues/{catalogueId}": {
+      "schema": "Catalogue",
+      "description": "Interactive product catalogues"
+    },
+    "orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer orders"
+    },
+    "pos_terminals/{terminalId}": {
+      "schema": "object",
+      "description": "POS Terminal configurations"
+    },
+    "pos_shifts/{shiftId}": {
+      "schema": "object",
+      "description": "POS operator shifts"
+    },
+    "pos_events/{eventId}": {
+      "schema": "object",
+      "description": "POS system and audit events"
+    },
+    "pos_sales/{saleId}": {
+      "schema": "object",
+      "description": "POS sales records"
+    },
+    "pos_sale_items/{itemId}": {
+      "schema": "object",
+      "description": "POS sale line items"
+    },
+    "pos_cash_movements/{movementId}": {
+      "schema": "object",
+      "description": "POS cash drawer movements"
+    },
+    "biEvents/{eventId}": {
+      "schema": "object",
+      "description": "Business Intelligence events"
+    },
+    "chart_accounts/{accountId}": {
+      "schema": "object",
+      "description": "Vendor chart of accounts"
+    },
+    "accounting_journals/{journalId}": {
+      "schema": "object",
+      "description": "Double-entry accounting journals"
+    },
+    "journal_lines/{lineId}": {
+      "schema": "object",
+      "description": "Lines for accounting journals"
+    },
+    "cashbook_entries/{entryId}": {
+      "schema": "object",
+      "description": "Cashbook records"
+    },
+    "bankbook_entries/{entryId}": {
+      "schema": "object",
+      "description": "Bank account movements"
+    },
+    "receipts/{receiptId}": {
+      "schema": "object",
+      "description": "Sales and payment receipts"
+    },
+    "payment_vouchers/{voucherId}": {
+      "schema": "object",
+      "description": "Payment vouchers"
+    },
+    "customer_accounts/{customerId}": {
+      "schema": "object",
+      "description": "Customer credit accounts"
+    },
+    "supplier_accounts/{supplierId}": {
+      "schema": "object",
+      "description": "Supplier creditor accounts"
+    },
+    "inventory_ledger/{ledgerId}": {
+      "schema": "object",
+      "description": "Inventory movement ledger"
+    },
+    "cogs_reserve_ledger/{ledgerId}": {
+      "schema": "object",
+      "description": "Ledger for COGS reserves"
+    },
+    "approval_requests/{requestId}": {
+      "schema": "object",
+      "description": "System approval requests"
+    },
+    "activation_requests/{requestId}": {
+      "schema": "ActivationRequest",
+      "description": "Vendor activation status requests"
+    },
+    "plans/{planId}": {
+      "schema": "Plan",
+      "description": "Available pricing plans"
+    },
+    "subscriptions/{subscriptionId}": {
+      "schema": "Subscription",
+      "description": "Vendor plan subscriptions"
+    },
+    "rpn_agents/{agentId}": {
+      "schema": "object",
+      "description": "Retailer Processing Network agents"
+    }
+  }
+}

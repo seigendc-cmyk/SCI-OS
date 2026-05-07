@@ -1,0 +1,219 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Phase 3: Global Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com'); }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // Lookup helpers
+    function getAppUser(uid) { return get(/databases/$(database)/documents/app_users/$(uid)).data; }
+    function vendorExists(vendorId) { return exists(/databases/$(database)/documents/vendors/$(vendorId)); }
+    
+    // Role checks
+    function isSuperAdmin() { 
+      return isSignedIn() && (getAppUser(request.auth.uid).role == 'super_admin' || request.auth.token.email == 'seigendc@gmail.com');
+    }
+    function isConsoleAdmin() { 
+      return isSignedIn() && (getAppUser(request.auth.uid).role == 'console_admin' || isSuperAdmin()); 
+    }
+    function isVendorOwner(vendorId) {
+      let user = getAppUser(request.auth.uid);
+      return isSignedIn() && user.vendorId == vendorId && (user.role == 'vendor_owner' || user.role == 'owner');
+    }
+    function isVendorStaff(vendorId) {
+      let user = getAppUser(request.auth.uid);
+      return isSignedIn() && user.vendorId == vendorId && user.role == 'vendor_staff';
+    }
+    function isVendorUser(vendorId) {
+      return isVendorOwner(vendorId) || isVendorStaff(vendorId);
+    }
+
+    // --- Phase 4: Collection Rules ---
+
+    // 1. App Users
+    match /app_users/{uid} {
+      function isValidUser(data) {
+        return data.uid == uid 
+            && data.email is string && data.email.size() <= 100
+            && data.role in ['super_admin', 'console_admin', 'vendor_owner', 'vendor_staff', 'public_user']
+            && data.createdAt == request.time
+            && data.updatedAt == request.time;
+      }
+      
+      allow get: if isSignedIn() && (request.auth.uid == uid || isConsoleAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid && isValidUser(incoming());
+      allow update: if isSignedIn() && (
+        (request.auth.uid == uid && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'profileStatus', 'updatedAt']) && incoming().updatedAt == request.time)
+        || isSuperAdmin()
+      );
+    }
+
+    // 2. Vendors
+    match /vendors/{vendorId} {
+      function isValidVendor(data) {
+        return data.id == vendorId 
+            && data.ownerUid == request.auth.uid
+            && data.name is string && data.name.size() <= 100
+            && data.status in ['draft', 'published', 'suspended']
+            && data.visibility in ['private', 'public']
+            && data.createdAt == request.time
+            && data.updatedAt == request.time;
+      }
+
+      allow get: if (existing().status == 'published' && existing().visibility == 'public') 
+                 || isVendorUser(vendorId) 
+                 || isConsoleAdmin();
+                 
+      allow list: if (resource.data.status == 'published' && resource.data.visibility == 'public')
+                  || isConsoleAdmin();
+
+      allow create: if isSignedIn() && request.auth.uid == vendorId && isValidVendor(incoming());
+      
+      allow update: if (isVendorUser(vendorId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'businessName', 'slug', 'visibility', 'status', 'phone', 'whatsapp', 'city', 'sector', 'address', 'country', 'description', 'email', 'updatedAt'])
+        && incoming().updatedAt == request.time
+      )) || isConsoleAdmin();
+    }
+
+    // 3. vendorUsers
+    match /vendorUsers/{uid} {
+      allow read: if (isSignedIn() && (request.auth.uid == uid || getAppUser(request.auth.uid).vendorId == resource.data.vendorId)) || isConsoleAdmin();
+      allow create: if isSignedIn() && request.auth.uid == uid && incoming().uid == uid;
+      allow update: if isVendorOwner(existing().vendorId) || isConsoleAdmin();
+    }
+
+    // 4. Products
+    match /products/{productId} {
+      function isValidProduct(data) {
+        return isValidId(data.vendorId)
+            && data.name is string && data.name.size() <= 200
+            && data.price is number && data.price >= 0
+            && data.status in ['draft', 'published']
+            && data.visibility in ['private', 'public']
+            && data.createdAt == request.time
+            && data.updatedAt == request.time;
+      }
+
+      allow get: if (existing().status == 'published' && existing().visibility == 'public')
+                 || isVendorUser(existing().vendorId)
+                 || isConsoleAdmin();
+                 
+      allow list: if (resource.data.status == 'published' && resource.data.visibility == 'public')
+                  || (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId)
+                  || isConsoleAdmin();
+      
+      allow create: if isSignedIn() && isVendorUser(incoming().vendorId) && vendorExists(incoming().vendorId) && isValidProduct(incoming());
+      
+      allow update: if isSignedIn() && isVendorUser(existing().vendorId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'sku', 'sector', 'category', 'brand', 'unit', 'price', 'costPrice', 'stockQty', 'reorderLevel', 'status', 'visibility', 'images', 'updatedAt'])
+        && incoming().updatedAt == request.time
+        && incoming().vendorId == existing().vendorId
+      ) || isConsoleAdmin();
+      
+      allow delete: if isSignedIn() && (isVendorOwner(existing().vendorId) || isConsoleAdmin());
+    }
+
+    // 5. Audit Logs
+    match /audit_logs/{logId} {
+      allow create: if isSignedIn();
+      allow get, list: if isConsoleAdmin();
+    }
+
+    // 6. Branches
+    match /branches/{branchId} {
+      allow read: if (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId) || isConsoleAdmin();
+      allow list: if (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId) || isConsoleAdmin();
+      
+      allow create: if isSignedIn() && (request.auth.uid == branchId.split('_')[0] || isVendorOwner(incoming().vendorId));
+      
+      allow update: if isSignedIn() && isVendorUser(existing().vendorId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'phone', 'whatsapp', 'address', 'city', 'country', 'latitude', 'longitude', 'isMainBranch', 'status', 'updatedAt'])
+        && incoming().updatedAt == request.time
+      ) || isConsoleAdmin();
+      
+      allow delete: if isSignedIn() && (isVendorOwner(existing().vendorId) || isConsoleAdmin());
+    }
+
+    // 7. Delivery Services
+    match /delivery_services/{deliveryId} {
+      allow read: if (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId) || isConsoleAdmin();
+      allow list: if (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId) || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorUser(incoming().vendorId);
+      allow update: if isSignedIn() && isVendorUser(existing().vendorId) && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && (isVendorOwner(existing().vendorId) || isConsoleAdmin());
+    }
+
+    // 8. Catalogues
+    match /catalogues/{catalogueId} {
+      allow get: if (resource.data.status == 'published' && resource.data.visibility == 'public') 
+                  || (isSignedIn() && (getAppUser(request.auth.uid).vendorId == resource.data.vendorId))
+                  || isConsoleAdmin();
+      
+      allow list: if (resource.data.status == 'published' && resource.data.visibility == 'public')
+                  || (isSignedIn() && (getAppUser(request.auth.uid).vendorId == resource.data.vendorId || isConsoleAdmin()));
+
+      allow create: if isSignedIn() && isVendorUser(incoming().vendorId);
+      allow update: if isSignedIn() && isVendorUser(existing().vendorId) && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && (isVendorOwner(existing().vendorId) || isConsoleAdmin());
+    }
+
+    // 9. Orders
+    match /orders/{orderId} {
+      allow get: if isVendorUser(resource.data.vendorId) || isConsoleAdmin();
+      allow list: if (isSignedIn() && (resource.data.vendorId == getAppUser(request.auth.uid).vendorId)) || isConsoleAdmin();
+      allow create: if true; // Public can create orders
+      allow update: if isVendorUser(existing().vendorId) && incoming().updatedAt == request.time || isConsoleAdmin();
+    }
+
+    // 10. Staff
+    match /staff/{staffId} {
+      allow read: if isVendorOwner(resource.data.vendorId) || isConsoleAdmin();
+      allow create: if isVendorOwner(incoming().vendorId);
+      allow update: if isVendorOwner(existing().vendorId);
+      allow delete: if isVendorOwner(existing().vendorId) || isConsoleAdmin();
+    }
+
+    // 11. Plans
+    match /plans/{planId} {
+      allow read: if isSignedIn();
+      allow write: if isConsoleAdmin();
+    }
+
+    // 12. Subscriptions
+    match /subscriptions/{subscriptionId} {
+      allow read: if (isSignedIn() && (request.auth.uid == subscriptionId.split('_')[0] || getAppUser(request.auth.uid).vendorId == resource.data.vendorId)) || isConsoleAdmin();
+      allow create: if isSignedIn() && (request.auth.uid == subscriptionId.split('_')[0] || isConsoleAdmin());
+      allow update: if (isVendorOwner(existing().vendorId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lastActivationRequestId', 'updatedAt'])
+        && (incoming().status == 'pending_activation' || existing().status == 'trial')
+        && incoming().updatedAt == request.time
+      )) || isConsoleAdmin();
+    }
+
+    // 13. Activation Requests
+    match /activation_requests/{requestId} {
+      allow read: if (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId) || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+      allow update: if isConsoleAdmin();
+    }
+
+    // 14. Notices
+    match /notices/{noticeId} {
+      allow get, list: if (resource.data.status == 'published' && resource.data.visibility == 'public')
+                  || (isSignedIn() && getAppUser(request.auth.uid).vendorId == resource.data.vendorId)
+                  || isConsoleAdmin();
+      allow create: if isSignedIn() && isVendorOwner(incoming().vendorId);
+      allow update: if isSignedIn() && isVendorOwner(existing().vendorId) && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && (isVendorOwner(existing().vendorId) || isConsoleAdmin());
+    }
+  }
+}
