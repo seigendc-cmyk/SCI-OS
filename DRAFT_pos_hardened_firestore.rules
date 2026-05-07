@@ -59,14 +59,24 @@ service cloud.firestore {
         && getAppUser().data.role == 'vendor_staff';
     }
 
-    // Admin/owner for a vendor (owner/admin/staff manager-ish concepts)
-    function isVendorAdminOrOwner(vendorId) {
-      // In this repo, console/admin roles exist separately.
-      // For POS hardening draft, treat vendor_owner + vendor_staff as privileged
-      // only for their own vendor.
-      return isVendorOwner(vendorId)
-        || (isSignedIn() && isVendorStaff(vendorId));
+    // Alias requested by hardening plan: explicit staff-member helper
+    function isVendorStaffMember(vendorId) {
+      return isVendorStaff(vendorId);
     }
+
+    // Admin/owner for a vendor.
+    // Important: Ordinary vendor_staff must NOT be treated as an approver.
+    function isVendorAdminOrOwner(vendorId) {
+      // Roles explicitly treated as approvers/managers in this draft.
+      // If your schema adds more manager roles (e.g. 'manager', 'admin'), extend list.
+      return isSignedIn() && isVendorMember(vendorId) && getAppUser().data.role in [
+        'vendor_owner',
+        'owner',
+        'vendor_admin',
+        'manager',
+      ];
+    }
+
 
     function isSameVendor(vendorIdA, vendorIdB) {
       return vendorIdA is string && vendorIdB is string && vendorIdA == vendorIdB;
@@ -210,25 +220,33 @@ service cloud.firestore {
       // - requestType
       // - createdAt
       allow create: if isSignedIn()
-        && isVendorStaff(incoming().vendorId)
+        && isVendorStaffMember(incoming().vendorId)
         && incoming().vendorId is string
         && incoming().requestedBy is string
         && incoming().requestedBy == request.auth.uid
         && incoming().requestType is string
         && incoming().createdAt is timestamp;
 
-      // Update: owner/admin can approve/reject.
-      // Since this is a conservative draft, we only allow updates if:
-      // - caller is vendor owner
-      // - critical fields cannot change after create
-      // - decision field transitions are attempted
+      // Update: only vendor_admin/manager/owner can approve/reject.
+      // Tighten the approval state machine conservatively.
+      // Constraints:
+      // - status can only change to approved or rejected
+      // - status cannot return to pending after decision
+      // - approvedBy must equal request.auth.uid
+      // - decidedAt must exist
+      // - vendorId, requestType, requestedBy, createdAt remain immutable
+      // - delete is always denied
       allow update: if isSignedIn()
         && isVendorAdminOrOwner(resource.data.vendorId)
         && isImmutableAfterCreate()
-        // Decision fields allowed to change (typical schema: status)
-        && incoming().get('status', '') in ['approved', 'rejected', 'pending', 'approved_pending']
-        // Prevent changing vendorId implicitly
-        && incoming().vendorId == resource.data.vendorId;
+        && incoming().vendorId == resource.data.vendorId
+        && incoming().get('status', '') in ['approved', 'rejected']
+        // Prevent reverting to pending
+        && resource.data.get('status', '') in ['pending', 'approved_pending']
+        // Decision metadata
+        && incoming().approvedBy == request.auth.uid
+        && incoming().decidedAt != null;
+
 
       // Deny delete
       allow delete: if false;
