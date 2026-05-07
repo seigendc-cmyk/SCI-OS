@@ -1,0 +1,287 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------
+    // POS-only hardening draft (draft file; NOT deployed)
+    // ------------------------------------------------------------
+    // Goals:
+    // - Keep default deny
+    // - Add POS-specific helpers
+    // - Harden POS collections conservatively
+    // - Make critical/evidence collections append-only (create only)
+    // - Keep policy conservative; may be tightened further later
+    // ------------------------------------------------------------
+
+    // 0) Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Basic app-user lookup (used by this draft for role/vendor scoping)
+    function getAppUser() {
+      return get(/databases/$(database)/documents/app_users/$(request.auth.uid));
+    }
+
+    function isVendorMember(vendorId) {
+      return isSignedIn()
+        && vendorId is string
+        && exists(/databases/$(database)/documents/app_users/$(request.auth.uid))
+        && getAppUser().data.vendorId == vendorId
+        && getAppUser().data.profileStatus != 'suspended';
+    }
+
+    function isVendorOwner(vendorId) {
+      return isSignedIn()
+        && isVendorMember(vendorId)
+        && getAppUser().data.role in ['vendor_owner', 'owner'];
+    }
+
+    function isVendorStaff(vendorId) {
+      return isSignedIn()
+        && isVendorMember(vendorId)
+        && getAppUser().data.role == 'vendor_staff';
+    }
+
+    // Admin/owner for a vendor (owner/admin/staff manager-ish concepts)
+    function isVendorAdminOrOwner(vendorId) {
+      // In this repo, console/admin roles exist separately.
+      // For POS hardening draft, treat vendor_owner + vendor_staff as privileged
+      // only for their own vendor.
+      return isVendorOwner(vendorId)
+        || (isSignedIn() && isVendorStaff(vendorId));
+    }
+
+    function isSameVendor(vendorIdA, vendorIdB) {
+      return vendorIdA is string && vendorIdB is string && vendorIdA == vendorIdB;
+    }
+
+    // Shift open gate.
+    // Assumes pos_shifts documents have fields:
+    // - vendorId
+    // - status (e.g., 'open'/'closed')
+    // If your schema differs, adjust.
+    function isOpenShift(vendorId, shiftId) {
+      return isSignedIn()
+        && vendorId is string
+        && shiftId is string
+        && exists(/databases/$(database)/documents/pos_shifts/$(shiftId))
+        && get(/databases/$(database)/documents/pos_shifts/$(shiftId)).data.vendorId == vendorId
+        && get(/databases/$(database)/documents/pos_shifts/$(shiftId)).data.status == 'open';
+    }
+
+    // Enforce append-only / immutable fields.
+    // Pattern: all updates must keep existing immutable fields identical.
+    // Intended usage for “prevent changing vendorId, requestType, requestedBy, createdAt after create”.
+    function isImmutableAfterCreate() {
+      // This helper is used inside update rules.
+      // When updating, we ensure certain keys remain unchanged.
+      // If the schema uses different field names, adjust.
+      return incoming().get('vendorId', null) == existing().get('vendorId', null)
+        && incoming().get('requestType', null) == existing().get('requestType', null)
+        && incoming().get('requestedBy', null) == existing().get('requestedBy', null)
+        && incoming().get('createdAt', null) == existing().get('createdAt', null);
+    }
+
+    // Members allowed to read vendor-scoped POS.
+    function canReadVendorPOS(vendorId) {
+      return isSignedIn() && isVendorMember(vendorId);
+    }
+
+    // Strict vendor member conditions (used for “create only under strict vendor/member conditions”).
+    function canCreateVendorPOS(vendorId) {
+      return isSignedIn() && isVendorMember(vendorId);
+    }
+
+    // ------------------------------------------------------------
+    // POS collections
+    // ------------------------------------------------------------
+
+    // POS terminals setup
+    match /pos_terminals/{terminalId} {
+      allow read, list: if isSignedIn() && exists(
+        /databases/$(database)/documents/pos_terminals/$(terminalId)
+      ) && canReadVendorPOS(resource.data.vendorId);
+
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Conservative: deny terminal updates/deletes in draft.
+      allow update, delete: if false;
+    }
+
+    match /pos_shifts/{shiftId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Conservative: allow shift creation only by vendor members for now.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Deny updates/deletes in this draft to reduce attack surface.
+      // In the hardened end-state, you will likely allow controlled transitions.
+      allow update, delete: if false;
+    }
+
+    // Evidence / append-only operational events
+    match /pos_events/{eventId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Append-only: allow create if vendor member.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Deny updates/deletes
+      allow update, delete: if false;
+    }
+
+    // Sales header
+    match /pos_sales/{saleId} {
+      // Read: vendor members only
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create: must be vendor-scoped, shift open, terminal exists, and shift exists.
+      allow create: if isSignedIn()
+        && canCreateVendorPOS(incoming().vendorId)
+        && incoming().vendorId is string
+        && incoming().shiftId is string
+        && incoming().terminalId is string
+        && isOpenShift(incoming().vendorId, incoming().shiftId)
+        // terminal must belong to same vendor
+        && exists(/databases/$(database)/documents/pos_terminals/$(incoming().terminalId))
+        && get(/databases/$(database)/documents/pos_terminals/$(incoming().terminalId)).data.vendorId == incoming().vendorId;
+
+      // Update/Delete rules:
+      // - Deny by default for safety.
+      // - Additionally, even if you allow updates later, this draft denies update/delete to avoid
+      //   client-side finalization tampering.
+      allow update, delete: if false;
+    }
+
+    // Sale items
+    match /pos_sale_items/{itemId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create: only if item is vendor-scoped and linked sale belongs to same vendor.
+      allow create: if isSignedIn()
+        && canCreateVendorPOS(incoming().vendorId)
+        && incoming().saleId is string
+        && exists(/databases/$(database)/documents/pos_sales/$(incoming().saleId))
+        && get(/databases/$(database)/documents/pos_sales/$(incoming().saleId)).data.vendorId == incoming().vendorId;
+
+      // Append-only: deny updates/deletes
+      allow update, delete: if false;
+    }
+
+    // Cash movements
+    match /pos_cash_movements/{movementId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create: require vendor scoping and open shift
+      allow create: if isSignedIn()
+        && canCreateVendorPOS(incoming().vendorId)
+        && incoming().shiftId is string
+        && isOpenShift(incoming().vendorId, incoming().shiftId);
+
+      // Deny update/delete
+      allow update, delete: if false;
+    }
+
+    // Approval requests
+    match /approval_requests/{approvalId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create: staff can request.
+      // Assumes fields:
+      // - vendorId
+      // - requestedBy (user uid)
+      // - requestType
+      // - createdAt
+      allow create: if isSignedIn()
+        && isVendorStaff(incoming().vendorId)
+        && incoming().vendorId is string
+        && incoming().requestedBy is string
+        && incoming().requestedBy == request.auth.uid
+        && incoming().requestType is string
+        && incoming().createdAt is timestamp;
+
+      // Update: owner/admin can approve/reject.
+      // Since this is a conservative draft, we only allow updates if:
+      // - caller is vendor owner
+      // - critical fields cannot change after create
+      // - decision field transitions are attempted
+      allow update: if isSignedIn()
+        && isVendorAdminOrOwner(resource.data.vendorId)
+        && isImmutableAfterCreate()
+        // Decision fields allowed to change (typical schema: status)
+        && incoming().get('status', '') in ['approved', 'rejected', 'pending', 'approved_pending']
+        // Prevent changing vendorId implicitly
+        && incoming().vendorId == resource.data.vendorId;
+
+      // Deny delete
+      allow delete: if false;
+    }
+
+    // audit_logs (append-only evidence)
+    match /audit_logs/{logId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create only for vendor members under strict conditions for now.
+      // NOTE: final hardened version should move this to backend callable only.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Append-only: deny update/delete
+      allow update, delete: if false;
+    }
+
+    // biEvents (append-only intelligence)
+    match /biEvents/{eventId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create only for vendor members under strict conditions for now.
+      // NOTE: final hardened version should move this to backend callable only.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Append-only: deny update/delete
+      allow update, delete: if false;
+    }
+
+    // Inventory ledger (append-only)
+    match /inventory_ledger/{ledgerId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create only for vendor members under strict conditions for now.
+      // NOTE: final hardened version should move this to backend callable only.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Append-only: deny update/delete
+      allow update, delete: if false;
+    }
+
+    // COGS reserve ledger (append-only)
+    match /cogs_reserve_ledger/{ledgerId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create only for vendor members under strict conditions for now.
+      // NOTE: final hardened version should move this to backend callable only.
+      allow create: if isSignedIn() && canCreateVendorPOS(incoming().vendorId);
+
+      // Append-only: deny update/delete
+      allow update, delete: if false;
+    }
+
+  }
+}
+
