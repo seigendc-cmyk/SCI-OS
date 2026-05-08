@@ -14,9 +14,10 @@ Create a boundary so that:
 Implement a thin set of backend entry points that behave like RPCs:
 - `pos.openShift`
 - `pos.closeShift`
+- `pos.requestApproval`
+- `pos.applyApproval`
 - `pos.createSaleDraft`
 - `pos.finalizeSale`
-- `pos.applyApproval`
 - `pos.postInventoryAndLedger`
 - `pos.postPayments`
 - `pos.logAudit`
@@ -28,9 +29,11 @@ In Firebase these can be implemented as:
 - Background triggers (for append-only evidence generation)
 
 ## Service boundary responsibilities (must be consistent across all RPCs)
+
 ### 1) Identity and tenant scoping
 - Determine `vendorId` from authenticated user context (never accept vendorId blindly from client)
-- Enforce roles: owner/admin vs staff
+- Enforce roles:
+  - owner/admin vs staff
 - Enforce terminal/branch/shift relationships belong to the same vendor
 
 ### 2) Shift state machine enforcement
@@ -44,18 +47,18 @@ For `finalizeSale` (and any stock-affecting operation):
 - update stock balances
 - append inventory ledger entries
 
-All of the above must happen atomically in backend transactions/batched logic.
+All of the above must happen atomically in backend logic.
 
 ### 4) Approval workflow integrity
-- Staff can **request** approvals
-- Owner/admin (or roles with explicit approval permissions) can **apply** approvals
-- Approved/rejected decisions must become immutable
+- Staff can request approvals
+- Only owner/admin (or roles with explicit permission) can apply approvals
+- Approved/rejected decisions become immutable
 - Sale effects must reference a valid approval decision when required
 
 ### 5) Append-only audit/BI events
-- Every RPC-like operation appends:
-  - `audit_logs` (evidence)
-  - `biEvents` (intelligence)
+Every RPC-like operation appends:
+- `audit_logs` (evidence)
+- `biEvents` (intelligence)
 
 Rules must enforce:
 - clients cannot update/delete audit/BI
@@ -63,13 +66,11 @@ Rules must enforce:
 
 ## Security rules strategy (how rules should support the boundary)
 - Default deny: deny all reads/writes not explicitly permitted
-- Critical collections:
-  - deny client create/update/delete for finalization/ledger/cash movements
-  - allow only backend-created writes (implementation options described below)
+- Critical collections should deny client mutations and allow backend-only writes
 
-Practical options for “backend-only create” enforcement:
-- **Best**: use callable functions + restrict client rules so that only admin/service identity can write
-- **Fallback**: deny client write by default and allow only minimal safe writes (e.g., draft/cart)
+Implementation options for “backend-only create” enforcement:
+1. Best: callable functions + restrict client rules so that only admin/service identity can write
+2. Fallback: deny client writes by default and allow only minimal safe writes (e.g., draft/cart)
 
 ## Data model mapping to current repo naming
 Current code indicates these POS-related collections exist/are used:
@@ -79,12 +80,12 @@ Current code indicates these POS-related collections exist/are used:
 - `pos_cash_movements`
 - `pos_shifts`
 - `pos_terminals`
-- `inventory_ledger` (referenced in design)
+- `inventory_ledger` (planned/used in design)
 - `audit_logs`
-- `biEvents` (note casing in code)
+- `biEvents`
 - `approval_requests`
 
-This RPC-like service plan must align with those names to avoid drift.
+Future service RPCs must align with those names to avoid schema drift.
 
 ## Sequencing (what to implement first)
 1. Tighten Firestore rules to stop client-side mutations of:

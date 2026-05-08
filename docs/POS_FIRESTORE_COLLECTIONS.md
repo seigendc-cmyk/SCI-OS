@@ -15,14 +15,15 @@ Collections referenced by current Firestore rules / services include:
 - `pos_terminals`
 - `pos_shifts`
 - `approval_requests`
-- POS-related inventory and ledger collections appear planned/partial in the rules (examples):
-  - `inventory_ledger`
-  - `cogs_reserve_ledger`
+
+POS-related inventory/ledger collections appear planned/partial in the rules (examples):
+- `inventory_ledger`
+- `cogs_reserve_ledger`
 
 ## Hardening posture by collection
 
 ### audit_logs (append-only, evidence)
-- **Client create**: temporary (current implementation creates from frontend)
+- Client create: temporary (current implementation creates from frontend)
 - Hardened target:
   - client create/update/delete => denied
   - backend-only create => allowed
@@ -44,7 +45,7 @@ Collections referenced by current Firestore rules / services include:
   - deny update/delete
 
 ### pos_shifts (shift state machine)
-- **Critical**: shift open/close is a gating mechanism.
+- Critical: shift open/close is gating mechanism.
 - Hardened target:
   - client can request open/close via callable, but cannot directly mutate `pos_shifts`
   - deny client update/delete
@@ -52,23 +53,23 @@ Collections referenced by current Firestore rules / services include:
 ### pos_terminals (terminal permissions)
 - Setup data.
 - Hardened target:
-  - allow owner/admin to manage via callable or tightly-scoped client rules
+  - allow owner/admin manage via callable or tightly-scoped client rules
   - deny staff mutation
 
 ### pos_sales (sale header)
 - Hardened target:
-  - client cannot “finalize” by writing totals directly
+  - client cannot finalize by writing totals directly
   - either:
-    - allow draft creation only (if needed), but deny finalize updates
-    - or deny all client writes; only backend finalization creates
-- Enforce invariants in rules (where feasible):
-  - `shiftId` must reference open shift (requires rule lookup; may be expensive but preferable)
+    - allow draft creation only and deny finalize updates, OR
+    - deny all client writes and only backend finalization creates
+- Enforce invariants in rules where feasible:
+  - `shiftId` must reference an open shift
+  - terminal must belong to the same vendor
 
 ### pos_sale_items (sale lines)
 - Hardened target:
   - deny update/delete
   - only allow create during backend finalization
-  - if draft mode exists, restrict fields
 
 ### pos_cash_movements (cash drawer ledger)
 - Hardened target:
@@ -77,12 +78,13 @@ Collections referenced by current Firestore rules / services include:
 
 ### approval_requests (approval lifecycle)
 - Hardened target:
-  - allow staff create (request)
+  - allow staff create (requests)
   - allow owner/admin approve/reject (update)
-  - deny delete
+  - deny delete always
   - enforce:
-    - only transitions that match allowed state machine
-    - only one final decision (approved/rejected) and immutable after
+    - state machine transitions
+    - only one final decision
+    - immutable after final decision
 
 ### inventory ledger tables (stock movement)
 Examples referenced in design/rules:
@@ -92,10 +94,11 @@ Examples referenced in design/rules:
 Hardened target:
 - append-only
 - client cannot write
-- backend-only writes via stock deduction flow
+- backend-only stock deduction flow posts ledger
 
 ## Tenant scope: vendorId
 Almost all documents must include `vendorId` (or derive it) to enforce tenant scoping.
+
 Rules must ensure:
 - reads are restricted to vendor-owned records
 - writes only happen for same vendor
@@ -106,14 +109,7 @@ Sale/payment actions must always include:
 - `shiftId`
 - `terminalId`
 
-Hardening target:
+Hardened target:
 - sales cannot be created/finalized without valid open shift
 - shift transitions block further sales
-
-## Minimum required index/rule constraints (for later)
-For future callable/rule lookups, ensure that:
-- `pos_shifts` are queryable by `vendorId` + `status` + `shiftId`
-- `pos_terminals` relate by `terminalId` + `vendorId`
-
-(Actual indexes should be decided during implementation; this is planning only.)
 
