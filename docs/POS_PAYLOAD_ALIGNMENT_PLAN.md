@@ -9,8 +9,12 @@
   - shift is present and `status == 'open'`
   - terminal is present and belongs to the same vendor
 
+### Implemented: append-only return summary introduced
+- Refund completion now also writes an append-only `pos_return_summaries/{summaryId}` document with identifiers and totals, reducing dependency on mutating `pos_sales/{originalSaleId}`.
+
 ### Still not deployable yet (strict draft)
-- Strict draft remains blocked by the current client-side `batch.update(pos_sales/{originalSaleId})` behavior in `completeReturnRefund`. That update must move to callable/backend or be replaced with an append-only return summary.
+- Strict draft remains blocked by the temporary client-side `batch.update(pos_sales/{originalSaleId})` behavior. This update will be removed after UI no longer depends on it (final target: callable/backend `finalizeRefund`).
+
 
 - **Create (pending):** added `requestedBy` (while retaining `requestedByUid`) alongside `requestedByEmail`, `requestType`, `vendorId`, `createdAt`, and `status: 'pending'`.
 - **Approve:** added `approvedBy` + `decidedAt` (while retaining `approvedByUid`, `approvedAt`) and kept status transitions to `status: 'approved'`.

@@ -48,6 +48,31 @@ That callable should:
 - create any immutable evidence (audit/BI)
 - avoid forbidden updates to immutable/denied collections, or replace them with append-only summaries.
 
+## Append-only return summary introduced
+To reduce dependency on mutating `pos_sales/{originalSaleId}` (which strict draft rules will deny), `completeReturnRefund` now writes an append-only document:
+
+- `pos_return_summaries/{summaryId}`
+
+Written fields:
+- `summaryId`
+- `vendorId`
+- `originalSaleId`
+- `refundSaleId`
+- `returnRequestId`
+- `refundReceiptNumber`
+- `totalRefund`
+- `totalCostReversal`
+- `refundMethod`
+- `terminalId`
+- `shiftId`
+- `completedByUid`
+- `completedByEmail`
+- `createdAt`
+
+This summary is the future replacement for mutating the original sale header.
+
+Strict rules can later allow `pos_return_summaries` create while denying `pos_sales` update.
+
 ## Deployment/implementation sequence
 1. Add shift pre-checks in `completeReturnRefund`.
 2. Add terminal pre-checks in `completeReturnRefund`.
@@ -55,6 +80,8 @@ That callable should:
    - open shift (should proceed)
    - closed shift (should throw the friendly error and not write refund sale)
 4. Confirm the friendly errors match expectations.
-5. Later move original sale update to callable/backend or append-only summary.
-6. Only then revisit strict draft rules deployment.
+5. Verify append-only `pos_return_summaries` write happens during refund finalization.
+6. Later move/remove the temporary original `pos_sales` update once the UI no longer depends on it.
+7. Only then revisit strict draft rules deployment.
+
 

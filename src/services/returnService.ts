@@ -650,18 +650,46 @@ export const completeReturnRefund = async (params: {
       }
     }
 
-    // 6. Update Original Sale
+    // 6. Append-only return summary (future replacement for original pos_sales mutation)
+    // Strict draft rules will likely deny update/delete on `pos_sales`.
+    // This summary document is the migration path toward an append-only return model.
+    completeStep = 'create_return_summary';
+    const summaryId = `RET-SUM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const totalRefund = safeNumber(latestRequest.totalRefund);
+    const totalCostReversal = safeNumber(latestRequest.totalCostReversal);
+
+    batch.set(doc(db, 'pos_return_summaries', summaryId),
+      stripUndefined({
+        summaryId,
+        vendorId: safeString(vendorId),
+        originalSaleId,
+        refundSaleId,
+        returnRequestId: safeString(requestId),
+        refundReceiptNumber,
+        totalRefund,
+        totalCostReversal,
+        refundMethod: safeString(latestRequest.refundMethod, 'cash'),
+        terminalId: safeString(latestRequest.terminalId, 'UNKNOWN'),
+        shiftId: safeString(latestRequest.shiftId, 'UNKNOWN'),
+        completedByUid: safeString(user.uid),
+        completedByEmail: safeString(user.email, 'system'),
+        createdAt: now,
+      }),
+    );
+
+    // 6b. Temporary original sale update (UI compatibility only)
     completeStep = 'update_original_sale';
-    // TODO hardening: this original sale update will be blocked by strict draft rules and must move to callable/backend or append-only return summary.
+    // TODO hardening: this original sale update is temporary compatibility only and will be blocked by strict draft rules.
+    // Final hardened target: callable/backend finalizeRefund writes the summary and avoids mutating original pos_sales.
     batch.update(doc(db, 'pos_sales', originalSaleId), {
       hasReturn: true,
-      returnedAmount: increment(safeNumber(latestRequest.totalRefund)),
+      returnedAmount: increment(totalRefund),
       updatedAt: now,
     });
 
-
     // 7. Accounting
     completeStep = 'prepare_accounting';
+
     try {
       const getAccId = (code: string) => `${vendorId}-${code}`;
       const totalRefund = safeNumber(latestRequest.totalRefund);
