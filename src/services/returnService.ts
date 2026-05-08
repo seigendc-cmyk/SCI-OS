@@ -165,14 +165,19 @@ export const createReturnRequest = async (params: ReturnRequestParams) => {
       sourceCollection: 'pos_return_requests',
       sourceId: returnId,
       originalSaleId: safeString(originalSale.saleId ?? originalSale.id),
+      // Legacy fields (retained)
       requestedByUid: safeString(user.uid),
       requestedByEmail: safeString(user.email, 'system'),
+      // Draft-compatible fields (dual-write)
+      requestedBy: safeString(user.uid),
+      createdAt: now,
+      // Decision fields (kept as pending)
       status: 'pending',
       reason: safeString(reason),
       amount: safeNumber(totalRefund),
-      createdAt: now,
       updatedAt: now,
     });
+
 
     assertNoUndefined(approvalPayload, 'approvalDoc');
     batch.set(doc(db, 'approval_requests', approvalId), approvalPayload);
@@ -299,11 +304,17 @@ export const approveReturnRequest = async (
       approveStep = 'prepare_approval_update';
       const approvalUpdate = stripUndefined({
         status: 'approved',
+        // Legacy fields (retained)
         approvedAt: now,
         approvedByUid: safeString(user.uid),
         approvedByEmail: safeString(user.email, 'system'),
+        // Draft-compatible fields (dual-write)
+        approvedBy: safeString(user.uid),
+        decidedAt: now,
         updatedAt: now,
       });
+
+
       approvalsSnap.docs.forEach((d) => {
         batch.update(d.ref, approvalUpdate);
       });
@@ -405,9 +416,20 @@ export const rejectReturnRequest = async (
   approvalsSnap.docs.forEach((d) => {
     batch.update(d.ref, {
       status: 'rejected',
+      // Legacy fields (retained)
+      approvedAt: now,
+      approvedByUid: safeString(user.uid),
+      approvedByEmail: safeString(user.email, 'system'),
+      rejectedAt: now,
+      rejectedByUid: safeString(user.uid),
+      rejectedByEmail: safeString(user.email, 'system'),
+      // Draft-compatible fields (dual-write)
+      approvedBy: safeString(user.uid),
+      decidedAt: now,
       updatedAt: now,
     });
   });
+
 
   console.log('[RETURN REJECTION] Committing batch for', requestId);
   await batch.commit();

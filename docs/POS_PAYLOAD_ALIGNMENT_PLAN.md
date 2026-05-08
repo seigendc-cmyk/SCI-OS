@@ -1,5 +1,12 @@
 # POS Payload Alignment Plan (Firebase/Vite) — Compatibility with `DRAFT_pos_hardened_firestore.rules`
 
+## Implemented in code
+- Updated `src/services/returnService.ts` approval/return flow to **dual-write** `approval_requests` payload fields so it becomes compatible with the draft rule expectations.
+- **Create (pending):** added `requestedBy` (while retaining `requestedByUid`) alongside `requestedByEmail`, `requestType`, `vendorId`, `createdAt`, and `status: 'pending'`.
+- **Approve:** added `approvedBy` + `decidedAt` (while retaining `approvedByUid`, `approvedAt`) and kept status transitions to `status: 'approved'`.
+- **Reject:** added `approvedBy` + `decidedAt` (while retaining rejection actor/time fields) and kept status to `status: 'rejected'`.
+
+
 This is documentation-only. No runtime code changes, no Firestore rules deployment, and no edits to `firestore.rules`.
 
 Goal: prepare the current Firebase POS codebase (current collection schemas/payloads) so it can become compatible with the draft hardening rules in:
