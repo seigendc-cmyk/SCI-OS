@@ -300,6 +300,45 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ------------------------------------------------------------------
+    // pos_return_summaries (append-only future replacement evidence)
+    // ------------------------------------------------------------------
+    // This collection is the future replacement for mutating
+    // `pos_sales/{originalSaleId}` during returns/refunds.
+    //
+    // Current transition model:
+    // - Refund completion writes pos_return_summaries{summaryId}
+    // - Temporary client-side update to pos_sales remains for UI compatibility
+    //
+    // Strict draft goal:
+    // - Allow vendor members to CREATE only when the referenced refund sale exists
+    // - Deny update/delete to keep append-only guarantees
+    match /pos_return_summaries/{summaryId} {
+      allow read, list: if isSignedIn() && canReadVendorPOS(resource.data.vendorId);
+
+      // Create constraints
+      allow create: if isSignedIn()
+        && canCreateVendorPOS(incoming().vendorId)
+        // basic payload shape
+        && incoming().vendorId is string
+        && incoming().originalSaleId is string
+        && incoming().refundSaleId is string
+        && incoming().returnRequestId is string
+        && incoming().terminalId is string
+        && incoming().shiftId is string
+        && incoming().completedByUid == request.auth.uid
+        // Firestore timestamp check (draft contract)
+        && incoming().createdAt is timestamp
+        // referenced refund sale must exist
+        && exists(/databases/$(database)/documents/pos_sales/$(incoming().refundSaleId))
+        // referenced refund sale must match vendor
+        && get(/databases/$(database)/documents/pos_sales/$(incoming().refundSaleId)).data.vendorId == incoming().vendorId;
+
+      // Deny updates/deletes (append-only)
+      allow update, delete: if false;
+    }
+
   }
 }
+
 
