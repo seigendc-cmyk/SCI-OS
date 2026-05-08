@@ -115,17 +115,22 @@ Legend:
 - ❌ should be denied
 
 ### Test 1) approval_requests create with requestedBy
-- Auth: `ownerA`
+- Auth: `staffA`
 - Write: `approval_requests/{approvalId}` with:
   - `vendorId: "vendorA"`
   - `requestedBy: "staffA"` (string)
   - `requestType: "POS_RETURN_REFUND"`
   - `createdAt: <timestamp>`
   - `requestedBy == request.auth.uid` must hold (rule checks equality)
+
+Expected pass/fail cases:
 - Case A:
-  - requestedBy == `ownerA` ✅
+  - Auth = `staffA`, requestedBy = `staffA` ✅ allowed
 - Case B:
-  - requestedBy != `ownerA` (e.g. staffA) ❌
+  - Auth = `ownerA`, requestedBy = `ownerA` ❌ denied (rule requires `isVendorStaffMember(incoming().vendorId)` for create)
+- Case C:
+  - Auth = `staffA`, requestedBy != `staffA` (e.g. `requestedBy: "ownerA"` or any other uid) ❌ denied
+
 
 ### Test 2) approval_requests approve/reject with approvedBy and decidedAt
 - Auth: `ownerA` (must satisfy `isVendorAdminOrOwner`)
