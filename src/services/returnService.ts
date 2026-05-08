@@ -498,6 +498,60 @@ export const completeReturnRefund = async (params: {
     const refundReceiptNumber = `RFN-${Date.now().toString().slice(-6)}`;
     const originalSaleId = safeString(latestRequest.originalSaleId);
 
+    // --- POS draft compatibility guards ---
+    // DRAFT_pos_hardened_firestore.rules requires `pos_sales` creation to satisfy:
+    // - vendorId
+    // - shiftId
+    // - terminalId
+    // - referenced shift is OPEN
+    // - terminal belongs to the same vendor
+
+    // Shift pre-check
+    const shiftId = safeString(latestRequest.shiftId, 'UNKNOWN');
+    if (!shiftId || shiftId === 'UNKNOWN') {
+      throw new Error(
+        'Refund completion requires an open POS shift. Open a shift or complete this refund through a manager-controlled backend flow.',
+      );
+    }
+
+    const shiftSnap = await getDoc(doc(db, 'pos_shifts', shiftId));
+    if (!shiftSnap.exists()) {
+      throw new Error(
+        'Refund completion requires an open POS shift. Open a shift or complete this refund through a manager-controlled backend flow.',
+      );
+    }
+    const shiftData = shiftSnap.data() as any;
+    const shiftVendorId = safeString(shiftData.vendorId);
+    const shiftStatus = safeString(shiftData.status);
+    if (shiftVendorId !== safeString(vendorId) || shiftStatus !== 'open') {
+      throw new Error(
+        'Refund completion requires an open POS shift. Open a shift or complete this refund through a manager-controlled backend flow.',
+      );
+    }
+
+    // Terminal pre-check
+    const terminalId = safeString(latestRequest.terminalId, 'UNKNOWN');
+    if (!terminalId || terminalId === 'UNKNOWN') {
+      throw new Error(
+        'Refund completion requires a valid POS terminal linked to this vendor.',
+      );
+    }
+
+    const terminalSnap = await getDoc(doc(db, 'pos_terminals', terminalId));
+    if (!terminalSnap.exists()) {
+      throw new Error(
+        'Refund completion requires a valid POS terminal linked to this vendor.',
+      );
+    }
+    const terminalData = terminalSnap.data() as any;
+    const terminalVendorId = safeString(terminalData.vendorId);
+    if (terminalVendorId !== safeString(vendorId)) {
+      throw new Error(
+        'Refund completion requires a valid POS terminal linked to this vendor.',
+      );
+    }
+
+
     console.log('[COMPLETE REFUND STEP]', {
       completeStep,
       requestId,
@@ -598,11 +652,13 @@ export const completeReturnRefund = async (params: {
 
     // 6. Update Original Sale
     completeStep = 'update_original_sale';
+    // TODO hardening: this original sale update will be blocked by strict draft rules and must move to callable/backend or append-only return summary.
     batch.update(doc(db, 'pos_sales', originalSaleId), {
       hasReturn: true,
       returnedAmount: increment(safeNumber(latestRequest.totalRefund)),
       updatedAt: now,
     });
+
 
     // 7. Accounting
     completeStep = 'prepare_accounting';

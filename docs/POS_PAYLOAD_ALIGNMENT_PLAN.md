@@ -2,6 +2,16 @@
 
 ## Implemented in code
 - Updated `src/services/returnService.ts` approval/return flow to **dual-write** `approval_requests` payload fields so it becomes compatible with the draft rule expectations.
+- Pending follow-up: refund completion will add shift/terminal open checks in `completeReturnRefund` before creating refund sale (to satisfy draft `pos_sales` create constraints).
+
+### Implemented after approval alignment
+- Refund completion compatibility work will be applied by guarding `completeReturnRefund` so it verifies:
+  - shift is present and `status == 'open'`
+  - terminal is present and belongs to the same vendor
+
+### Still not deployable yet (strict draft)
+- Strict draft remains blocked by the current client-side `batch.update(pos_sales/{originalSaleId})` behavior in `completeReturnRefund`. That update must move to callable/backend or be replaced with an append-only return summary.
+
 - **Create (pending):** added `requestedBy` (while retaining `requestedByUid`) alongside `requestedByEmail`, `requestType`, `vendorId`, `createdAt`, and `status: 'pending'`.
 - **Approve:** added `approvedBy` + `decidedAt` (while retaining `approvedByUid`, `approvedAt`) and kept status transitions to `status: 'approved'`.
 - **Reject:** added `approvedBy` + `decidedAt` (while retaining rejection actor/time fields) and kept status to `status: 'rejected'`.
